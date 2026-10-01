@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ssh-watch — live detection console</title>
+<style>
+:root{
+  --bg:#0b1020; --surface:#131b30; --surface-2:#0f1627; --raise:#18223b;
+  --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.16);
+  --text:#e7ebf4; --muted:#8a93ab; --faint:#5c6683;
+  --crit:#ff4d5e; --high:#ffb224; --safe:#43e0a0; --accent:#5aa8ff;
+  --mono:ui-monospace,"Cascadia Code","SFMono-Regular",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--sans);
+  line-height:1.5; -webkit-font-smoothing:antialiased; min-height:100vh;
+  background-image:radial-gradient(1100px 520px at 82% -12%, rgba(90,168,255,.09), transparent 60%);
+}
+a{color:var(--accent)}
+.strip{height:3px;width:100%;background:var(--safe);transition:background .5s ease}
+.strip[data-tone="high"]{background:var(--high)}
+.strip[data-tone="crit"]{background:var(--crit)}
+.wrap{max-width:1060px;margin:0 auto;padding:0 20px 72px}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+  padding:22px 0 26px;flex-wrap:wrap}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand b{font-size:1.15rem;font-weight:700;letter-spacing:-.01em}
+.brand span{font-family:var(--mono);font-size:.8rem;color:var(--faint)}
+.sync{display:flex;align-items:center;gap:14px;font-size:.82rem;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--safe);display:inline-block;
+  box-shadow:0 0 0 0 rgba(67,224,160,.5);animation:ping 2.4s ease-out infinite}
+.dot.off{animation:none;background:var(--faint);box-shadow:none}
+@keyframes ping{0%{box-shadow:0 0 0 0 rgba(67,224,160,.45)}70%{box-shadow:0 0 0 7px rgba(67,224,160,0)}100%{box-shadow:0 0 0 0 rgba(67,224,160,0)}}
+.btn{font:inherit;font-size:.82rem;color:var(--text);background:var(--raise);
+  border:1px solid var(--line-strong);border-radius:8px;padding:6px 12px;cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.hero{border:1px solid var(--line);border-radius:16px;background:
+  linear-gradient(180deg,var(--surface),var(--surface-2));padding:30px 30px 32px;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(520px 200px at 0% 0%,rgba(255,255,255,.04),transparent 60%)}
+.verdict-k{font-size:.8rem;color:var(--muted);margin:0 0 6px}
+.verdict{font-size:clamp(2.4rem,6vw,4.1rem);font-weight:750;letter-spacing:-.03em;
+  line-height:1.02;margin:0}
+.verdict[data-tone="safe"]{color:var(--safe)}
+.verdict[data-tone="high"]{color:var(--high)}
+.verdict[data-tone="crit"]{color:var(--crit)}
+.verdict.live[data-tone="high"],.verdict.live[data-tone="crit"]{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.72}}
+.verdict-note{margin:14px 0 0;color:var(--text);font-size:1.02rem;max-width:62ch}
+.verdict-note b{font-family:var(--mono);font-weight:600}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}
+.kpi{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:16px 16px 14px}
+.kpi .n{font-family:var(--mono);font-size:1.9rem;font-weight:600;letter-spacing:-.02em;line-height:1}
+.kpi .l{font-size:.8rem;color:var(--muted);margin-top:8px}
+.kpi.crit .n{color:var(--crit)} .kpi.high .n{color:var(--high)}
+
+.cols{display:grid;grid-template-columns:1.15fr .85fr;gap:12px;margin-bottom:12px}
+.panel{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:18px 18px 16px}
+.panel h2{font-size:.86rem;font-weight:600;color:var(--text);margin:0 0 14px}
+.panel .hint{font-size:.8rem;color:var(--muted)}
+
+.src{display:grid;grid-template-columns:1fr;gap:11px}
+.srow{display:grid;grid-template-columns:128px 1fr auto;align-items:center;gap:12px}
+.srow .ip{font-family:var(--mono);font-size:.84rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{display:block;height:10px;border-radius:5px;background:var(--surface-2);overflow:hidden}
+.fill{display:block;height:100%;border-radius:5px;background:var(--accent);min-width:3px}
+.fill.high{background:var(--high)} .fill.crit{background:var(--crit)}
+.srow .v{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+
+.mix{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--surface-2);margin-bottom:16px}
+.mix i{display:block;height:100%}
+.mix .c{background:var(--crit)} .mix .h{background:var(--high)} .mix .l{background:var(--faint)}
+.legend{display:grid;gap:9px}
+.leg{display:flex;align-items:center;gap:9px;font-size:.84rem;color:var(--muted)}
+.leg .sw{width:9px;height:9px;border-radius:3px}
+.leg .sw.c{background:var(--crit)} .leg .sw.h{background:var(--high)} .leg .sw.l{background:var(--faint)}
+.leg b{color:var(--text);font-family:var(--mono);font-weight:600;margin-left:auto}
+
+.feed{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+.feed h2{font-size:.86rem;font-weight:600;margin:0;padding:18px 18px 14px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:12px 18px;font-size:.86rem;border-top:1px solid var(--line)}
+th{color:var(--muted);font-weight:500;font-size:.78rem}
+td.t,td.ip{font-family:var(--mono);color:var(--muted);white-space:nowrap}
+td.ip{color:var(--text)}
+.chip{display:inline-flex;align-items:center;gap:7px;font-size:.78rem;color:var(--text)}
+.chip .sw{width:8px;height:8px;border-radius:50%}
+.chip.crit .sw{background:var(--crit)} .chip.high .sw{background:var(--high)} .chip.low .sw{background:var(--faint)}
+
+.state{padding:30px 18px;color:var(--muted);font-size:.92rem}
+.state.err{color:#ffd0d4;border-left:3px solid var(--crit);background:rgba(255,77,94,.06)}
+.state b{color:var(--text)}
+.state code{font-family:var(--mono);background:var(--surface-2);padding:2px 6px;border-radius:5px;color:var(--text)}
+
+@media (max-width:760px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .cols{grid-template-columns:1fr}
+  .srow{grid-template-columns:104px 1fr auto}
+}
+@media (prefers-reduced-motion:reduce){
+  .dot,.verdict.live{animation:none!important}
+}
+</style>
+</head>
+<body>
+<div class="strip" id="strip"></div>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand"><b>ssh-watch</b><span>detection console</span></div>
+    <div class="sync">
+      <span class="dot" id="pulse" aria-hidden="true"></span>
+      <span id="synced">Connecting…</span>
+      <button class="btn" id="toggle" aria-pressed="false">Pause</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <p class="verdict-k" id="verdictK">Perimeter status</p>
+    <h1 class="verdict" id="verdict">—</h1>
+    <p class="verdict-note" id="verdictNote"></p>
+  </section>
+
+  <section class="kpis" id="kpis" hidden>
+    <div class="kpi"><div class="n" id="kTotal">0</div><div class="l">Findings logged</div></div>
+    <div class="kpi high"><div class="n" id="kBrute">0</div><div class="l">Brute-force alerts</div></div>
+    <div class="kpi crit"><div class="n" id="kCrit">0</div><div class="l">Confirmed breaches</div></div>
+    <div class="kpi"><div class="n" id="kIps">0</div><div class="l">Attacking sources</div></div>
+  </section>
+
+  <section class="cols" id="cols" hidden>
+    <div class="panel">
+      <h2>Top sources by attempts</h2>
+      <div class="src" id="sources"></div>
+    </div>
+    <div class="panel">
+      <h2>Severity mix</h2>
+      <div class="mix" id="mix"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </section>
+
+  <section class="feed">
+    <h2>Event feed</h2>
+    <div id="feedBody"><div class="state">Connecting to findings…</div></div>
+  </section>
+
+</div>
+
+<script>
+var REFRESH = 3000;
+var live = true;
+var timer = null;
+
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function severityOf(t){
+  if(t==='critical_success_after_attack') return 'Critical';
+  if(t==='brute_force_alert') return 'High';
+  return 'Low';
+}
+function rank(sev){return sev==='Critical'?3:sev==='High'?2:1;}
+function sourceOf(r){return (r.details&&r.details.ip)?r.details.ip:null;}
+function summaryOf(r){
+  var d=r.details||{};
+  if(r.type==='brute_force_alert') return 'Brute force — '+d.failed_logins+' failed logins in '+d.window_seconds+'s';
+  if(r.type==='critical_success_after_attack') return 'Logged in as '+d.user+' right after a brute-force burst';
+  return 'No brute-force pattern in the latest scan';
+}
+function fmtTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d)) return esc(iso);
+  return d.toLocaleString([], {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function clockOf(iso){
+  var d=new Date(iso);
+  return isNaN(d)?'—':d.toLocaleTimeString();
+}
+
+function setStatus(rows){
+  var strip=document.getElementById('strip');
+  var vk=document.getElementById('verdictK');
+  var v=document.getElementById('verdict');
+  var note=document.getElementById('verdictNote');
+  var crit=rows.filter(function(r){return r.type==='critical_success_after_attack';});
+  var brute=rows.filter(function(r){return r.type==='brute_force_alert';});
+  var tone,label,text;
+  if(crit.length){
+    tone='crit'; label='Breach confirmed';
+    var c=crit[crit.length-1];
+    text='Attacker <b>'+esc(c.details.ip)+'</b> logged in as <b>'+esc(c.details.user)+'</b> after breaking in.';
+  }else if(brute.length){
+    tone='high'; label='Under attack';
+    var b=brute[brute.length-1];
+    text='Brute-force burst from <b>'+esc(b.details.ip)+'</b> — '+esc(b.details.failed_logins)+' failed logins inside '+esc(b.details.window_seconds)+'s.';
+  }else{
+    tone='safe'; label='All clear';
+    text='No brute-force pattern detected. The watch is live and the feed updates every '+(REFRESH/1000)+' seconds.';
+  }
+  strip.setAttribute('data-tone',tone);
+  v.setAttribute('data-tone',tone);
+  v.classList.toggle('live',live);
+  v.textContent=label;
+  note.innerHTML=text;
+}
+
+function renderKpis(rows){
+  var brute=rows.filter(function(r){return r.type==='brute_force_alert';}).length;
+  var crit=rows.filter(function(r){return r.type==='critical_success_after_attack';}).length;
+  var ips={};
+  rows.forEach(function(r){var ip=sourceOf(r); if(ip) ips[ip]=true;});
+  document.getElementById('kTotal').textContent=rows.length;
+  document.getElementById('kBrute').textContent=brute;
+  document.getElementById('kCrit').textContent=crit;
+  document.getElementById('kIps').textContent=Object.keys(ips).length;
+  document.getElementById('kpis').hidden=false;
+}
+
+function renderSources(rows){
+  var agg={};
+  rows.forEach(function(r){
+    var ip=sourceOf(r); if(!ip) return;
+    var w=(r.type==='brute_force_alert'&&r.details.failed_logins)?r.details.failed_logins:1;
+    if(!agg[ip]) agg[ip]={ip:ip,count:0,worst:0};
+    agg[ip].count+=w;
+    agg[ip].worst=Math.max(agg[ip].worst,rank(severityOf(r.type)));
+  });
+  var list=Object.keys(agg).map(function(k){return agg[k];})
+    .sort(function(a,b){return b.count-a.count;}).slice(0,5);
+  var cols=document.getElementById('cols');
+  var host=document.getElementById('sources');
+  if(!list.length){ cols.hidden=true; return; }
+  cols.hidden=false;
+  var max=list[0].count||1;
+  host.innerHTML=list.map(function(s){
+    var cls=s.worst===3?'crit':s.worst===2?'high':'';
+    var pct=Math.max(6,Math.round(s.count/max*100));
+    return '<div class="srow"><span class="ip">'+esc(s.ip)+'</span>'
+      +'<span class="track"><span class="fill '+cls+'" style="width:'+pct+'%"></span></span>'
+      +'<span class="v">'+s.count+'</span></div>';
+  }).join('');
+}
+
+function renderMix(rows){
+  var c=0,h=0,l=0;
+  rows.forEach(function(r){var s=severityOf(r.type); if(s==='Critical')c++; else if(s==='High')h++; else l++;});
+  var t=c+h+l||1;
+  document.getElementById('mix').innerHTML=
+    '<i class="c" style="width:'+(c/t*100)+'%"></i>'
+    +'<i class="h" style="width:'+(h/t*100)+'%"></i>'
+    +'<i class="l" style="width:'+(l/t*100)+'%"></i>';
+  document.getElementById('legend').innerHTML=
+    '<div class="leg"><span class="sw c"></span>Confirmed breach<b>'+c+'</b></div>'
+    +'<div class="leg"><span class="sw h"></span>Brute-force alert<b>'+h+'</b></div>'
+    +'<div class="leg"><span class="sw l"></span>Informational<b>'+l+'</b></div>';
+}
+
+function renderFeed(rows){
+  var host=document.getElementById('feedBody');
+  if(!rows.length){
+    host.innerHTML='<div class="state"><b>No findings yet.</b> Start the detector with '
+      +'<code>sudo python3 detector2.py /var/log/auth.log --follow</code> and events will appear here.</div>';
+    return;
+  }
+  var body=rows.slice().reverse().map(function(r){
+    var sev=severityOf(r.type);
+    var cls=sev.toLowerCase();
+    return '<tr><td class="t">'+fmtTime(r.logged_at)+'</td>'
+      +'<td class="ip">'+esc(sourceOf(r)||'—')+'</td>'
+      +'<td>'+esc(summaryOf(r))+'</td>'
+      +'<td><span class="chip '+cls+'"><span class="sw"></span>'+sev+'</span></td></tr>';
+  }).join('');
+  host.innerHTML='<table><thead><tr><th>Time</th><th>Source</th><th>Event</th><th>Severity</th></tr></thead><tbody>'+body+'</tbody></table>';
+}
+
+function showError(html){
+  document.getElementById('kpis').hidden=true;
+  document.getElementById('cols').hidden=true;
+  document.getElementById('feedBody').innerHTML='<div class="state err">'+html+'</div>';
+  document.getElementById('strip').setAttribute('data-tone','high');
+  var v=document.getElementById('verdict');
+  v.setAttribute('data-tone','high'); v.classList.remove('live'); v.textContent='Signal lost';
+  document.getElementById('verdictNote').textContent='The console cannot read findings.json. Details are in the event feed below.';
+}
+
+async function load(){
+  if(location.protocol==='file:'){
+    showError('<b>This console must be served, not opened from a file.</b> From the folder holding '
+      +'dashboard.html and findings.json, run <code>python3 -m http.server 8000</code> and open '
+      +'<code>http://localhost:8000/dashboard.html</code>.');
+    document.getElementById('synced').textContent='Not served';
+    return;
+  }
+  try{
+    var res=await fetch('findings.json?t='+Date.now());
+    if(res.status===404){
+      showError('<b>findings.json not found.</b> Run <code>sudo python3 detector2.py /var/log/auth.log --follow</code> '
+        +'in this same folder, then launch an attack to populate it.');
+      document.getElementById('synced').textContent='Waiting for data';
+      return;
+    }
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    var rows=await res.json();
+    if(!Array.isArray(rows)) throw new Error('findings.json is not a list');
+
+    setStatus(rows);
+    renderKpis(rows);
+    renderSources(rows);
+    renderMix(rows);
+    renderFeed(rows);
+
+    var last=rows.length?clockOf(rows[rows.length-1].logged_at):null;
+    document.getElementById('synced').textContent='Updated '+new Date().toLocaleTimeString()
+      +(last?' · last event '+last:'');
+  }catch(e){
+    showError('<b>Could not read findings.json.</b> '+esc(e.message)+'.');
+    document.getElementById('synced').textContent='Error';
+  }
+}
+
+function tick(){ if(live) load(); }
+
+document.getElementById('toggle').addEventListener('click',function(){
+  live=!live;
+  this.textContent=live?'Pause':'Resume';
+  this.setAttribute('aria-pressed',String(!live));
+  document.getElementById('pulse').classList.toggle('off',!live);
+  document.getElementById('verdict').classList.toggle('live',live);
+  if(live) load();
+});
+
+load();
+timer=setInterval(tick,REFRESH);
+</script>
+</body>
+</html>
