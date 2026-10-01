@@ -14,11 +14,19 @@ BOT_TOKEN = "8850254032:AAGdhHdzMSJBJ6OVfwN8xH4FrgFePoSluKk"
 CHAT_ID = "5034528323"
 FINDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "findings.json")
 
-FAIL_RE = re.compile(r"^(\w+\s+\d+\s+\d+:\d+:\d+).*Failed password.*from (\d+\.\d+\.\d+\.\d+)")
-SUCCESS_RE = re.compile(r"^(\w+\s+\d+\s+\d+:\d+:\d+).*Accepted password for (\S+) from (\d+\.\d+\.\d+\.\d+)")
+FAIL_PATTERNS = [
+    re.compile(r"Failed password for (?:invalid user )?\S+ from (\d+\.\d+\.\d+\.\d+)"),
+    re.compile(r"Connection closed by (?:authenticating|invalid) user \S+ (\d+\.\d+\.\d+\.\d+) port \d+ \[preauth\]"),
+    re.compile(r"Disconnected from (?:authenticating|invalid) user \S+ (\d+\.\d+\.\d+\.\d+) port \d+ \[preauth\]"),
+]
+SUCCESS_RE = re.compile(r"Accepted password for (\S+) from (\d+\.\d+\.\d+\.\d+)")
 
-def parse_ts(raw):
-    return datetime.strptime(f"{datetime.now().year} {raw}", "%Y %b %d %H:%M:%S")
+def find_fail_ip(line):
+    for pattern in FAIL_PATTERNS:
+        m = pattern.search(line)
+        if m:
+            return m.group(1)
+    return None
 
 def save_finding(finding_type, details):
     findings = []
@@ -54,10 +62,9 @@ def block_ip(ip):
         print("Could not block IP:", e)
 
 def handle_line(line, per_ip, flagged):
-    fail_match = FAIL_RE.search(line)
-    if fail_match:
-        ts = parse_ts(fail_match.group(1))
-        ip = fail_match.group(2)
+    ip = find_fail_ip(line)
+    if ip:
+        ts = datetime.now()
         hits = per_ip[ip]
         hits.append(ts)
         while hits and (ts - hits[0]).total_seconds() > WINDOW:
@@ -79,9 +86,9 @@ def handle_line(line, per_ip, flagged):
 
     success_match = SUCCESS_RE.search(line)
     if success_match:
-        ts = parse_ts(success_match.group(1))
-        user = success_match.group(2)
-        ip = success_match.group(3)
+        ts = datetime.now()
+        user = success_match.group(1)
+        ip = success_match.group(2)
         if ip in flagged and (ts - flagged[ip]).total_seconds() < 600:
             msg = (f"CRITICAL: Successful login after brute force!\n"
                    f"IP: {ip}\nLogged in as: {user}")
