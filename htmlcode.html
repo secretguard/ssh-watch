@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live Findings</title>
+<style>
+body { font-family: Arial, Helvetica, sans-serif; background: #f5f7fa; padding: 24px; color: #222; }
+h2 { color: #1F4E78; margin: 0 0 4px 0; }
+.sub { color: #667; font-size: 13px; margin: 0 0 18px 0; }
+table { border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px #0002; }
+th { background: #1F4E78; color: #fff; text-align: left; padding: 9px 12px; font-size: 13px; }
+td { padding: 9px 12px; border-top: 1px solid #e3e8ee; font-size: 13px; vertical-align: top; }
+.sev { color: #fff; font-weight: bold; text-align: center; white-space: nowrap; }
+.note { color: #888; background: #fff; padding: 16px; border-radius: 4px; box-shadow: 0 1px 3px #0002; display: inline-block; }
+.err { color: #a33; background: #fff3f3; border-left: 3px solid #e74c3c; padding: 12px 14px; font-size: 13px; }
+.meta { color: #8a94a0; font-size: 12px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<h2>Live Findings</h2>
+<p class="sub">SSH brute-force detection &middot; detector2.py writes findings.json, this page reads it</p>
+
+<div id="out"><p class="note">Loading&hellip;</p></div>
+<p class="meta" id="meta"></p>
+
+<script>
+function esc(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function severityOf(type) {
+  if (type === 'critical_success_after_attack') return 'Critical';
+  if (type === 'brute_force_alert') return 'High';
+  return 'Low';
+}
+
+function colourOf(sev) {
+  if (sev === 'Critical') return '#c0392b';
+  if (sev === 'High') return '#e74c3c';
+  if (sev === 'Medium') return '#f39c12';
+  return '#95a5a6';
+}
+
+function summaryOf(r) {
+  var d = r.details || {};
+  if (r.type === 'brute_force_alert') {
+    return 'Brute force from ' + d.ip + ' (' + d.failed_logins + ' fails in ' + d.window_seconds + 's)';
+  }
+  if (r.type === 'critical_success_after_attack') {
+    return 'Successful login from ' + d.ip + ' as ' + d.user + ' after brute force';
+  }
+  return 'No brute-force pattern in ' + d.file;
+}
+
+async function load() {
+  var out = document.getElementById('out');
+  var meta = document.getElementById('meta');
+
+  if (location.protocol === 'file:') {
+    out.innerHTML = '<div class="err"><b>This page must be served, not opened by double-clicking.</b><br>'
+      + 'In a terminal, from the folder holding detector2.py and htmlcode.html, run '
+      + '<b>python3 -m http.server 8000</b> and then open '
+      + '<b>http://localhost:8000/htmlcode.html</b></div>';
+    meta.textContent = '';
+    return;
+  }
+
+  try {
+    var res = await fetch('findings.json?t=' + Date.now());
+
+    if (res.status === 404) {
+      out.innerHTML = '<p class="note">No findings.json yet &mdash; run '
+        + '<b>python3 detector2.py &lt;auth.log&gt;</b> from this same folder.</p>';
+      meta.textContent = 'Checked at ' + new Date().toLocaleTimeString();
+      return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    var rows = await res.json();
+
+    if (!rows.length) {
+      out.innerHTML = '<p class="note">findings.json is empty.</p>';
+    } else {
+      var html = '<table><tr><th>Time</th><th>Finding</th><th>Severity</th></tr>';
+      rows.slice().reverse().forEach(function (r) {
+        var sev = severityOf(r.type);
+        html += '<tr><td>' + esc(r.logged_at) + '</td>'
+              + '<td>' + esc(summaryOf(r)) + '</td>'
+              + '<td class="sev" style="background:' + colourOf(sev) + '">' + esc(sev) + '</td></tr>';
+      });
+      out.innerHTML = html + '</table>';
+    }
+
+    meta.textContent = rows.length + ' finding(s) · refreshed at '
+      + new Date().toLocaleTimeString() + ' · auto-refreshing every 3s';
+
+  } catch (e) {
+    out.innerHTML = '<div class="err"><b>Could not read findings.json.</b><br>'
+      + 'Error: ' + esc(e.message) + '</div>';
+    meta.textContent = '';
+  }
+}
+
+load();
+setInterval(load, 3000);
+</script>
+
+</body>
+</html>
